@@ -1,3 +1,4 @@
+import json
 from statistics import mean
 from math import isfinite 
 import torch
@@ -12,8 +13,9 @@ from .data import DataIterator
 from .dali import DaliDataIterator
 from .utils import ignore_sigint, post_metrics, Profiler
 from .infer import infer
+from .augmentations import create_augmentations
 
-def train(model, state, path, annotations, val_path, val_annotations, resize, max_size, jitter, batch_size, iterations, val_iterations, mixed_precision, lr, warmup, milestones, gamma, is_master=True, world=1, use_dali=True, verbose=True, metrics_url=None, logdir=None):
+def train(model, state, path, annotations, val_path, val_annotations, augs, resize, max_size, jitter, batch_size, iterations, val_iterations, mixed_precision, lr, warmup, milestones, gamma, is_master=True, world=1, use_dali=True, verbose=True, metrics_url=None, logdir=None):
     'Train the model on the given dataset'
 
     # Prepare model
@@ -48,9 +50,15 @@ def train(model, state, path, annotations, val_path, val_annotations, resize, ma
 
     # Prepare dataset
     if verbose: print('Preparing dataset...')
-    data_iterator = (DaliDataIterator if use_dali else DataIterator)(
-        path, jitter, max_size, batch_size, stride,
-        world, annotations, training=True)
+    if use_dali:
+        data_iterator = DaliDataIterator(path, jitter, max_size, batch_size, stride, world, annotations, training=True)
+    else:
+        with open(augs) as f:
+            augs_cfg = json.load(f)
+        transforms = create_augmentations(augs_cfg)
+        print("Current augmentations: \n", transforms)
+        data_iterator = DataIterator(path, jitter, max_size, batch_size, stride, world, annotations, transforms,
+                                     training=True)
     if verbose: print(data_iterator)
 
 
@@ -72,7 +80,6 @@ def train(model, state, path, annotations, val_path, val_annotations, resize, ma
     while iteration < iterations:
         cls_losses, box_losses = [], []
         for i, (data, target) in enumerate(data_iterator):
-            scheduler.step(iteration)
 
             # Forward pass
             profiler.start('fw')
@@ -87,6 +94,8 @@ def train(model, state, path, annotations, val_path, val_annotations, resize, ma
             with amp.scale_loss(cls_loss + box_loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
             optimizer.step()
+
+            scheduler.step(iteration)
 
             # Reduce all losses
             cls_loss, box_loss = cls_loss.mean().clone(), box_loss.mean().clone()

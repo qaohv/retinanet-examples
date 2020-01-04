@@ -25,6 +25,7 @@ def parse(args):
     parser_train.add_argument('model', type=str, help='path to output model or checkpoint to resume from')
     parser_train.add_argument('--annotations', metavar='path', type=str, help='path to COCO style annotations', required=True)
     parser_train.add_argument('--images', metavar='path', type=str, help='path to images', default='.')
+    parser_train.add_argument('--augs', type=str, help='path to augmentations config')
     parser_train.add_argument('--backbone', action='store', type=str, nargs='+', help='backbone model (or list of)', default=['ResNet50FPN'])
     parser_train.add_argument('--classes', metavar='num', type=int, help='number of classes', default=80)
     parser_train.add_argument('--batch', metavar='size', type=int, help='batch size', default=2*devcount)
@@ -65,7 +66,6 @@ def parse(args):
     parser_export.add_argument('--batch', metavar='size', type=int, help='max batch size to use for TensorRT engine', default=2)
     parser_export.add_argument('--full-precision', help='export in full instead of half precision', action='store_true')
     parser_export.add_argument('--int8', help='calibrate model and export in int8 precision', action='store_true')
-    parser_export.add_argument('--opset', metavar='version', type=int, help='ONNX opset version')
     parser_export.add_argument('--calibration-batches', metavar='size', type=int, help='number of batches to use for int8 calibration', default=10)
     parser_export.add_argument('--calibration-images', metavar='path', type=str, help='path to calibration images to use for int8 calibration', default="")
     parser_export.add_argument('--calibration-table', metavar='path', type=str, help='path of existing calibration table to load from, or name of new calibration table', default="")
@@ -121,7 +121,7 @@ def worker(rank, args, world, model, state):
 
     if args.command == 'train':
         train.train(model, state, args.images, args.annotations,
-            args.val_images or args.images, args.val_annotations, args.resize, args.max_size, args.jitter, 
+            args.val_images or args.images, args.val_annotations, args.augs, args.resize, args.max_size, args.jitter,
             args.batch, int(args.iters * args.schedule), args.val_iters, not args.full_precision, args.lr, 
             args.warmup, [int(m * args.schedule) for m in args.milestones], args.gamma, 
             is_master=(rank == 0), world=world, use_dali=args.with_dali,
@@ -162,7 +162,7 @@ def worker(rank, args, world, model, state):
         elif not args.full_precision:
             precision = "FP16"
 
-        exported = model.export(input_size, args.batch, precision, calibration_files, args.calibration_table, args.verbose, onnx_only=onnx_only, opset=args.opset)
+        exported = model.export(input_size, args.batch, precision, calibration_files, args.calibration_table, args.verbose, onnx_only=onnx_only)
         if onnx_only:
             with open(args.export, 'wb') as out:
                 out.write(exported)

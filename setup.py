@@ -27,8 +27,10 @@ setup(
         'torchvision',
         'apex @ git+https://github.com/NVIDIA/apex',
         'pycocotools @ git+https://github.com/nvidia/cocoapi.git#subdirectory=PythonAPI',
-        'pillow',
+        'pillow==6.2.2',
+        'tensorboardx==2.0',
         'requests',
+        'albumentations==0.4.3'
     ],
     entry_points = {'console_scripts': ['retinanet=retinanet.main:main']}
 )
