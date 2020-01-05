@@ -12,10 +12,11 @@ from .data import DataIterator
 from .dali import DaliDataIterator
 from .model import Model
 from .utils import Profiler
+from .logger import get_root_logger
 
 def infer(model, path, detections_file, resize, max_size, batch_size, mixed_precision=True, is_master=True, world=0, annotations=None, use_dali=True, is_validation=False, verbose=True):
     'Run inference on images from path'
-
+    logger = get_root_logger()
     backend = 'pytorch' if isinstance(model, Model) or isinstance(model, DDP) else 'tensorrt'
 
     stride = model.module.stride if isinstance(model, DDP) else model.stride
@@ -30,11 +31,11 @@ def infer(model, path, detections_file, resize, max_size, batch_size, mixed_prec
     if backend == 'tensorrt': max_size = max(model.input_size)
 
     # Prepare dataset
-    if verbose: print('Preparing dataset...')
+    if verbose: logger.info('Preparing dataset...')
     data_iterator = (DaliDataIterator if use_dali else DataIterator)(
         path, resize, max_size, batch_size, stride,
         world, annotations, training=False)
-    if verbose: print(data_iterator)
+    if verbose: logger.info(data_iterator)
 
     # Prepare model
     if backend is 'pytorch':
@@ -50,12 +51,12 @@ def infer(model, path, detections_file, resize, max_size, batch_size, mixed_prec
         model.eval()
 
     if verbose:
-        print('   backend: {}'.format(backend))
-        print('    device: {} {}'.format(
+        logger.info('   backend: {}'.format(backend))
+        logger.info('    device: {} {}'.format(
             world, 'cpu' if not torch.cuda.is_available() else 'gpu' if world == 1 else 'gpus'))
-        print('     batch: {}, precision: {}'.format(batch_size,
+        logger.info('     batch: {}, precision: {}'.format(batch_size,
             'unknown' if backend is 'tensorrt' else 'mixed' if mixed_precision else 'full'))
-        print('Running inference...')
+        logger.info('Running inference...')
 
     results = []
     profiler = Profiler(['infer', 'fw'])
@@ -76,12 +77,12 @@ def infer(model, path, detections_file, resize, max_size, batch_size, mixed_prec
                 msg += ' {:.3f}s/{}-batch'.format(profiler.means['infer'], batch_size)
                 msg += ' (fw: {:.3f}s)'.format(profiler.means['fw'])
                 msg += ', {:.1f} im/s'.format(batch_size / profiler.means['infer'])
-                print(msg, flush=True)
+                logger.info(msg)
 
                 profiler.reset()
 
     # Gather results from all devices
-    if verbose: print('Gathering results...')
+    if verbose: logger.info('Gathering results...')
     results = [torch.cat(r, dim=0) for r in zip(*results)]
     if world > 1:
         for r, result in enumerate(results):
@@ -121,7 +122,7 @@ def infer(model, path, detections_file, resize, max_size, batch_size, mixed_prec
 
         if detections:
             # Save detections
-            if detections_file and verbose: print('Writing {}...'.format(detections_file))
+            if detections_file and verbose: logger.info('Writing {}...'.format(detections_file))
             detections = { 'annotations': detections }
             detections['images'] = data_iterator.coco.dataset['images']
             if 'categories' in data_iterator.coco.dataset:
@@ -131,7 +132,7 @@ def infer(model, path, detections_file, resize, max_size, batch_size, mixed_prec
 
             # Evaluate model on dataset
             if 'annotations' in data_iterator.coco.dataset:
-                if verbose: print('Evaluating model...')
+                if verbose: logger.info('Evaluating model...')
                 with redirect_stdout(None):
                     coco_pred = data_iterator.coco.loadRes(detections['annotations'])
                     coco_eval = COCOeval(data_iterator.coco, coco_pred, 'bbox')
@@ -139,4 +140,4 @@ def infer(model, path, detections_file, resize, max_size, batch_size, mixed_prec
                     coco_eval.accumulate()
                 coco_eval.summarize()
         else:
-            print('No detections!')
+            logger.info('No detections!')

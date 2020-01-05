@@ -14,10 +14,12 @@ from .dali import DaliDataIterator
 from .utils import ignore_sigint, post_metrics, Profiler
 from .infer import infer
 from .augmentations import create_augmentations
+from .logger import get_root_logger
+
 
 def train(model, state, path, annotations, val_path, val_annotations, augs, resize, max_size, jitter, batch_size, iterations, val_iterations, mixed_precision, lr, warmup, milestones, gamma, is_master=True, world=1, use_dali=True, verbose=True, metrics_url=None, logdir=None):
     'Train the model on the given dataset'
-
+    logger = get_root_logger()
     # Prepare model
     nn_model = model
     stride = model.stride
@@ -49,30 +51,32 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
     scheduler = LambdaLR(optimizer, schedule)
 
     # Prepare dataset
-    if verbose: print('Preparing dataset...')
+    if verbose: logger.info('Preparing dataset...')
     if use_dali:
         data_iterator = DaliDataIterator(path, jitter, max_size, batch_size, stride, world, annotations, training=True)
     else:
         with open(augs) as f:
             augs_cfg = json.load(f)
         transforms = create_augmentations(augs_cfg)
-        print("Current augmentations: \n", transforms)
+        logger.info("Current augmentations:")
+        for t in transforms:
+            logger.info(t)
         data_iterator = DataIterator(path, jitter, max_size, batch_size, stride, world, annotations, transforms,
                                      training=True)
-    if verbose: print(data_iterator)
+    if verbose: logger.info(data_iterator)
 
 
     if verbose:
-        print('    device: {} {}'.format(
+        logger.info('    device: {} {}'.format(
             world, 'cpu' if not torch.cuda.is_available() else 'gpu' if world == 1 else 'gpus'))
-        print('    batch: {}, precision: {}'.format(batch_size, 'mixed' if mixed_precision else 'full'))
-        print('Training model for {} iterations...'.format(iterations))
+        logger.info('    batch: {}, precision: {}'.format(batch_size, 'mixed' if mixed_precision else 'full'))
+        logger.info('Training model for {} iterations...'.format(iterations))
 
     # Create TensorBoard writer
     if logdir is not None:
         from tensorboardX import SummaryWriter
         if is_master and verbose:
-            print('Writing TensorBoard logs to: {}'.format(logdir))
+            logger.info('Writing TensorBoard logs to: {}'.format(logdir))
         writer = SummaryWriter(logdir=logdir)
 
     profiler = Profiler(['train', 'fw', 'bw'])
@@ -125,15 +129,17 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                     msg  = '[{:{len}}/{}]'.format(iteration, iterations, len=len(str(iterations)))
                     msg += ' focal loss: {:.3f}'.format(focal_loss)
                     msg += ', box loss: {:.3f}'.format(box_loss)
+                    msg += ', total loss: {:.3f}'.format(focal_loss + box_loss)
                     msg += ', {:.3f}s/{}-batch'.format(profiler.means['train'], batch_size)
                     msg += ' (fw: {:.3f}s, bw: {:.3f}s)'.format(profiler.means['fw'], profiler.means['bw'])
                     msg += ', {:.1f} im/s'.format(batch_size / profiler.means['train'])
                     msg += ', lr: {:.2g}'.format(learning_rate)
-                    print(msg, flush=True)
+                    logger.info(msg)
 
                 if logdir is not None:
                     writer.add_scalar('focal_loss', focal_loss,  iteration)
                     writer.add_scalar('box_loss', box_loss, iteration)
+                    writer.add_scalar('total_loss', focal_loss + box_loss, iteration)
                     writer.add_scalar('learning_rate', learning_rate, iteration)
                     del box_loss, focal_loss
 
@@ -141,6 +147,7 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                     post_metrics(metrics_url, {
                         'focal loss': mean(cls_losses),
                         'box loss': mean(box_losses),
+                        'total loss': focal_loss + box_loss ,
                         'im_s': batch_size / profiler.means['train'],
                         'lr': learning_rate
                     })
@@ -151,8 +158,6 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
                 })
-                with ignore_sigint():
-                    nn_model.save(state)
 
                 profiler.reset()
                 del cls_losses[:], box_losses[:]
@@ -160,6 +165,9 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
             if val_annotations and (iteration == iterations or iteration % val_iterations == 0):
                 infer(model, val_path, None, resize, max_size, batch_size, annotations=val_annotations,
                     mixed_precision=mixed_precision, is_master=is_master, world=world, use_dali=use_dali, is_validation=True, verbose=False)
+                with ignore_sigint():
+                    nn_model.save(state)
+
                 model.train()
 
             if iteration == iterations:

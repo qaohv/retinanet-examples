@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils import data
 from pycocotools.coco import COCO
+from .logger import get_root_logger
 
 
 class CocoDataset(data.dataset.Dataset):
@@ -23,6 +24,7 @@ class CocoDataset(data.dataset.Dataset):
         self.std = [0.229, 0.224, 0.225]
         self.transforms = transforms
         self.training = training
+        self.logger = get_root_logger()
 
         with redirect_stdout(None):
             self.coco = COCO(annotations)
@@ -66,8 +68,8 @@ class CocoDataset(data.dataset.Dataset):
                     im, boxes, categories = augmented['image'], torch.tensor(augmented['bboxes']), \
                                             torch.tensor(augmented['category_id'])
                 except Exception as e:
-                    print("Caught exception: ", e)
-                    print("image is: ", image)
+                    self.logger.error("Caught exception: {}, fail image: {}".format(e, image))
+
 
             target = torch.cat([boxes, categories], dim=1)
         # Convert to tensor and normalize

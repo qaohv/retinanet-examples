@@ -11,6 +11,8 @@ from retinanet import infer, train, utils
 from retinanet.model import Model
 from retinanet import backbones
 from retinanet._C import Engine
+from retinanet.logger import get_root_logger
+
 
 def parse(args):
     parser = argparse.ArgumentParser(description='RetinaNet Detection Utility.')
@@ -44,7 +46,8 @@ def parse(args):
     parser_train.add_argument('--val-images', metavar='path', type=str, help='path to validation images')
     parser_train.add_argument('--post-metrics', metavar='url', type=str, help='post metrics to specified url')
     parser_train.add_argument('--fine-tune', metavar='path', type=str, help='fine tune a pretrained model')
-    parser_train.add_argument('--logdir', metavar='logdir', type=str, help='directory where to write logs')
+    parser_train.add_argument('--logdir', metavar='logdir', type=str, help='directory for tensorboard logs')
+    parser_train.add_argument('--logfile', type=str, help='file for script logs')
     parser_train.add_argument('--val-iters', metavar='number', type=int, help='number of iterations between each validation', default=8000)
     parser_train.add_argument('--with-dali', help='use dali for data loading', action='store_true')
 
@@ -73,7 +76,8 @@ def parse(args):
 
     return parser.parse_args(args)
 
-def load_model(args, verbose=False):
+
+def load_model(args, logger, verbose=False):
     if args.command != 'train' and not os.path.isfile(args.model):
         raise RuntimeError('Model file {} does not exist!'.format(args.model))
 
@@ -82,15 +86,15 @@ def load_model(args, verbose=False):
     _, ext = os.path.splitext(args.model)
 
     if args.command == 'train' and (not os.path.exists(args.model) or args.override):
-        if verbose: print('Initializing model...')
+        if verbose: logger.info('Initializing model...')
         model = Model(args.backbone, args.classes)
         model.initialize(args.fine_tune)
-        if verbose: print(model)
+        if verbose: logger.info(model)
 
     elif ext == '.pth' or ext == '.torch':
-        if verbose: print('Loading model from {}...'.format(os.path.basename(args.model)))
+        if verbose: logger.info('Loading model from {}...'.format(os.path.basename(args.model)))
         model, state = Model.load(args.model)
-        if verbose: print(model)
+        if verbose: logger.info(model)
 
     elif args.command == 'infer' and ext in ['.engine', '.plan']:
         model = None
@@ -101,7 +105,8 @@ def load_model(args, verbose=False):
     state['path'] = args.model
     return model, state
 
-def worker(rank, args, world, model, state):
+
+def worker(rank, args, world, model, state, logger):
     'Per-device distributed worker'
 
     if torch.cuda.is_available():
@@ -129,7 +134,7 @@ def worker(rank, args, world, model, state):
 
     elif args.command == 'infer':
         if model is None:
-            if rank == 0: print('Loading CUDA engine from {}...'.format(os.path.basename(args.model)))
+            if rank == 0: logger.info('Loading CUDA engine from {}...'.format(os.path.basename(args.model)))
             model = Engine.load(args.model)
 
         infer.infer(model, args.images, args.output, args.resize, args.max_size, args.batch,
@@ -152,7 +157,7 @@ def worker(rank, args, world, model, state):
                 if len(calibration_files) >= args.calibration_batches * args.batch:
                     calibration_files = calibration_files[:(args.calibration_batches * args.batch)]
                 else:
-                    print('Only found enough images for {} batches. Continuing anyway...'.format(len(calibration_files) // args.batch))
+                    logger.info('Only found enough images for {} batches. Continuing anyway...'.format(len(calibration_files) // args.batch))
 
                 random.shuffle(calibration_files)
 
@@ -173,15 +178,16 @@ def main(args=None):
     'Entry point for the retinanet command'
 
     args = parse(args or sys.argv[1:])
-
-    model, state = load_model(args, verbose=True)
+    logger = get_root_logger(args.logfile)
+    logger.info(f"Running script with following args: {args}")
+    model, state = load_model(args, logger, verbose=True)
     if model: model.share_memory()
 
     world = torch.cuda.device_count()
     if args.command == 'export' or world <= 1:
-        worker(0, args, 1, model, state)
+        worker(0, args, 1, model, state, logger)
     else:
-        torch.multiprocessing.spawn(worker, args=(args, world, model, state), nprocs=world)
+        torch.multiprocessing.spawn(worker, args=(args, world, model, state, logger), nprocs=world)
 
 if __name__ == '__main__':
     main()

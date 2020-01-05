@@ -180,8 +180,9 @@ class Model(nn.Module):
         for key in ('iteration', 'optimizer', 'scheduler'):
             if key in state:
                 checkpoint[key] = state[key]
-
-        torch.save(checkpoint, state['path'])
+        name, ext = os.path.splitext(state['path'])
+        path_to_save = f'{name}_it{state["iteration"]}{ext}'
+        torch.save(checkpoint, path_to_save)
 
     @classmethod
     def load(cls, filename):
