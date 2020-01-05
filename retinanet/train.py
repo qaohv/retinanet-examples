@@ -52,17 +52,15 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
 
     # Prepare dataset
     if verbose: logger.info('Preparing dataset...')
-    if use_dali:
-        data_iterator = DaliDataIterator(path, jitter, max_size, batch_size, stride, world, annotations, training=True)
-    else:
-        with open(augs) as f:
-            augs_cfg = json.load(f)
-        transforms = create_augmentations(augs_cfg)
-        logger.info("Current augmentations:")
-        for t in transforms:
-            logger.info(t)
-        data_iterator = DataIterator(path, jitter, max_size, batch_size, stride, world, annotations, transforms,
-                                     training=True)
+    with open(augs) as f:
+        augs_cfg = json.load(f)
+    transforms = create_augmentations(augs_cfg)
+    logger.info("Current augmentations:")
+    for t in transforms:
+        logger.info(t)
+    data_iterator = DataIterator(path, jitter, max_size, batch_size, stride, world, annotations, transforms,
+                                 training=True)
+    val_iterator = DataIterator(val_path, resize, max_size, batch_size, stride, world, val_annotations, training=True)
     if verbose: logger.info(data_iterator)
 
 
@@ -127,9 +125,9 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                 learning_rate = optimizer.param_groups[0]['lr']
                 if verbose:
                     msg  = '[{:{len}}/{}]'.format(iteration, iterations, len=len(str(iterations)))
-                    msg += ' focal loss: {:.3f}'.format(focal_loss)
-                    msg += ', box loss: {:.3f}'.format(box_loss)
-                    msg += ', total loss: {:.3f}'.format(focal_loss + box_loss)
+                    msg += ' train focal loss: {:.3f}'.format(focal_loss)
+                    msg += ', train box loss: {:.3f}'.format(box_loss)
+                    msg += ', total train loss: {:.3f}'.format(focal_loss + box_loss)
                     msg += ', {:.3f}s/{}-batch'.format(profiler.means['train'], batch_size)
                     msg += ' (fw: {:.3f}s, bw: {:.3f}s)'.format(profiler.means['fw'], profiler.means['bw'])
                     msg += ', {:.1f} im/s'.format(batch_size / profiler.means['train'])
@@ -139,7 +137,7 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                 if logdir is not None:
                     writer.add_scalar('focal_loss', focal_loss,  iteration)
                     writer.add_scalar('box_loss', box_loss, iteration)
-                    writer.add_scalar('total_loss', focal_loss + box_loss, iteration)
+                    writer.add_scalar('total_train_loss', focal_loss + box_loss, iteration)
                     writer.add_scalar('learning_rate', learning_rate, iteration)
                     del box_loss, focal_loss
 
@@ -163,8 +161,47 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                 del cls_losses[:], box_losses[:]
 
             if val_annotations and (iteration == iterations or iteration % val_iterations == 0):
+                # calculate validation loss
+                val_cls_losses, val_box_losses = [], []
+                for data, target in val_iterator:
+                    val_cls_loss, val_box_loss = model([data, target])
+                    del data
+
+                    with amp.scale_loss(val_cls_loss + val_box_loss, optimizer) as scaled_loss:
+                        scaled_loss.backward()
+
+                    val_cls_loss, val_box_loss = val_cls_loss.mean().clone(), val_box_loss.mean().clone()
+                    if world > 1:
+                        torch.distributed.all_reduce(val_cls_loss)
+                        torch.distributed.all_reduce(val_box_loss)
+                        val_cls_loss /= world
+                        val_box_loss /= world
+                    if is_master:
+                        val_cls_losses.append(val_cls_loss)
+                        val_box_losses.append(val_box_loss)
+
+                val_focal_loss = torch.stack(list(val_cls_losses)).mean().item()
+                val_bbox_loss = torch.stack(list(val_box_losses)).mean().item()
+
+                msg = '[{:{len}}/{}]'.format(iteration, iterations, len=len(str(iterations)))
+                msg += ' val focal loss: {:.3f}'.format(val_focal_loss)
+                msg += ', val box loss: {:.3f}'.format(val_bbox_loss)
+                msg += ', total val loss: {:.3f}'.format(val_focal_loss + val_bbox_loss)
+                logger.info(msg)
+
+                if logdir is not None:
+                    writer.add_scalar('val_focal_loss', val_focal_loss,  iteration)
+                    writer.add_scalar('val_box_loss', val_bbox_loss, iteration)
+                    writer.add_scalar('total_val_loss', val_focal_loss + val_bbox_loss, iteration)
+
+                    del val_bbox_loss, val_focal_loss
+
+                del val_cls_loss, val_box_loss
+                del val_cls_losses[:], val_box_losses[:]
+                # calculate COCO mAP
                 infer(model, val_path, None, resize, max_size, batch_size, annotations=val_annotations,
                     mixed_precision=mixed_precision, is_master=is_master, world=world, use_dali=use_dali, is_validation=True, verbose=False)
+
                 with ignore_sigint():
                     nn_model.save(state)
 
