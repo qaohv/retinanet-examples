@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+from PIL import Image
 import os
 import random
 from contextlib import redirect_stdout
@@ -34,112 +35,110 @@ class CocoDataset(data.dataset.Dataset):
 
     def __len__(self):
         return len(self.ids)
-
-    def __getitem__(self, index):
-        'Get sample'
-        # Load image
-        id = self.ids[index]
-
-        if self.coco:
-            image = self.coco.loadImgs(id)[0]['file_name']
-        img = cv2.cvtColor(cv2.imread(f"{self.path}/{image}"), cv2.COLOR_BGR2RGB)
-        img_size = img.shape[:2]
-
-        # Randomly sample scale for resize during training
-        resize = self.resize
-        if isinstance(resize, list):
-            resize = random.randint(self.resize[0], self.resize[-1])
-
-        ratio = resize / min(img_size)
-
-        if ratio * max(img_size) > self.max_size:
-            ratio = self.max_size / max(img_size)
-
-        img = cv2.resize(img, (int(ratio * img_size[1]), int(ratio * img_size[0])), cv2.INTER_LINEAR)
-        if self.training:
-            # Get annotations
-            boxes, categories = self._get_target(id)
-            boxes *= ratio
-
-            if self.transforms:
-                data = {'image': img, 'bboxes': np.asarray(boxes, dtype=int), 'category_id': np.asarray(categories)}
-                try:
-                    augmented = self.transforms(**data)
-                    im, boxes, categories = augmented['image'], torch.tensor(augmented['bboxes']), \
-                                            torch.tensor(augmented['category_id'])
-                except Exception as e:
-                    self.logger.error("Caught exception: {}, fail image: {}".format(e, image))
-
-
-            target = torch.cat([boxes, categories], dim=1)
-        # Convert to tensor and normalize
-        data = torch.from_numpy(img).float().div(255).permute([2, 0, 1])
-
-        for t, mean, std in zip(data, self.mean, self.std):
-            t.sub_(mean).div_(std)
-
-        # Apply padding
-        ph, pw = ((self.stride - d % self.stride) % self.stride for d in img.shape[:2])
-        data = F.pad(data, (0, pw, 0, ph))
-
-        if self.training:
-            return data, target
-
-        return data, id, ratio
-
+    # TODO: find error into cv2 method
     # def __getitem__(self, index):
-    #     ' Get sample'
-    #
+    #     'Get sample'
     #     # Load image
     #     id = self.ids[index]
+    #
     #     if self.coco:
     #         image = self.coco.loadImgs(id)[0]['file_name']
-    #     im = Image.open('{}/{}'.format(self.path, image)).convert("RGB")
+    #     img = cv2.cvtColor(cv2.imread(f"{self.path}/{image}"), cv2.COLOR_BGR2RGB)
+    #     img_size = img.shape[:2]
     #
     #     # Randomly sample scale for resize during training
     #     resize = self.resize
     #     if isinstance(resize, list):
     #         resize = random.randint(self.resize[0], self.resize[-1])
     #
-    #     ratio = resize / min(im.size)
-    #     if ratio * max(im.size) > self.max_size:
-    #         ratio = self.max_size / max(im.size)
-    #     im = im.resize((int(ratio * d) for d in im.size), Image.BILINEAR)
+    #     ratio = resize / min(img_size)
     #
+    #     if ratio * max(img_size) > self.max_size:
+    #         ratio = self.max_size / max(img_size)
+    #
+    #     img = cv2.resize(img, (int(ratio * img_size[1]), int(ratio * img_size[0])), cv2.INTER_LINEAR)
     #     if self.training:
     #         # Get annotations
     #         boxes, categories = self._get_target(id)
     #         boxes *= ratio
     #
     #         if self.transforms:
-    #             # TODO: change to cv2.pipeline without to avoid PIL -> cv2 -> PIL transformation
-    #             data = {'image': np.asarray(im), 'bboxes': np.asarray(boxes, dtype=int), 'category_id': np.asarray(categories)}
+    #             data = {'image': img, 'bboxes': np.asarray(boxes, dtype=int), 'category_id': np.asarray(categories)}
     #             try:
     #                 augmented = self.transforms(**data)
     #                 im, boxes, categories = augmented['image'], torch.tensor(augmented['bboxes']), \
     #                                         torch.tensor(augmented['category_id'])
-    #                 im = Image.fromarray(im)
     #             except Exception as e:
-    #                 print("Caught exception: ", e)
-    #                 print("image is: ", image)
+    #                 self.logger.error("Caught exception: {}, fail image: {}".format(e, image))
+    #
     #
     #         target = torch.cat([boxes, categories], dim=1)
     #     # Convert to tensor and normalize
-    #     data = torch.ByteTensor(torch.ByteStorage.from_buffer(im.tobytes()))
-    #     data = data.float().div(255).view(*im.size[::-1], len(im.mode))
-    #     data = data.permute(2, 0, 1)
+    #     data = torch.from_numpy(img).float().div(255).permute([2, 0, 1])
     #
     #     for t, mean, std in zip(data, self.mean, self.std):
     #         t.sub_(mean).div_(std)
     #
     #     # Apply padding
-    #     pw, ph = ((self.stride - d % self.stride) % self.stride for d in im.size)
+    #     ph, pw = ((self.stride - d % self.stride) % self.stride for d in img.shape[:2])
     #     data = F.pad(data, (0, pw, 0, ph))
     #
     #     if self.training:
     #         return data, target
     #
     #     return data, id, ratio
+
+    def __getitem__(self, index):
+        ' Get sample'
+
+        # Load image
+        id = self.ids[index]
+        if self.coco:
+            image = self.coco.loadImgs(id)[0]['file_name']
+        im = Image.open('{}/{}'.format(self.path, image)).convert("RGB")
+
+        # Randomly sample scale for resize during training
+        resize = self.resize
+        if isinstance(resize, list):
+            resize = random.randint(self.resize[0], self.resize[-1])
+
+        ratio = resize / min(im.size)
+        if ratio * max(im.size) > self.max_size:
+            ratio = self.max_size / max(im.size)
+        im = im.resize((int(ratio * d) for d in im.size), Image.BILINEAR)
+
+        if self.training:
+            # Get annotations
+            boxes, categories = self._get_target(id)
+            boxes *= ratio
+
+            if self.transforms:
+                data = {'image': np.asarray(im), 'bboxes': np.asarray(boxes, dtype=int), 'category_id': np.asarray(categories)}
+                try:
+                    augmented = self.transforms(**data)
+                    im, boxes, categories = augmented['image'], torch.tensor(augmented['bboxes']), \
+                                            torch.tensor(augmented['category_id'])
+                    im = Image.fromarray(im)
+                except Exception as e:
+                    self.logger.error("Caught exception: {}, fail image: {}".format(e, image))
+
+            target = torch.cat([boxes, categories], dim=1)
+        # Convert to tensor and normalize
+        data = torch.ByteTensor(torch.ByteStorage.from_buffer(im.tobytes()))
+        data = data.float().div(255).view(*im.size[::-1], len(im.mode))
+        data = data.permute(2, 0, 1)
+
+        for t, mean, std in zip(data, self.mean, self.std):
+            t.sub_(mean).div_(std)
+
+        # Apply padding
+        pw, ph = ((self.stride - d % self.stride) % self.stride for d in im.size)
+        data = F.pad(data, (0, pw, 0, ph))
+
+        if self.training:
+            return data, target
+
+        return data, id, ratio
 
     def _get_target(self, id):
         'Get annotations for sample'

@@ -40,7 +40,8 @@ def parse(args):
     parser_train.add_argument('--full-precision', help='train in full precision', action='store_true')
     parser_train.add_argument('--lr', metavar='value', help='learning rate', type=float, default=0.01)
     parser_train.add_argument('--warmup', metavar='iterations', help='numer of warmup iterations', type=int, default=1000)
-    parser_train.add_argument('--gamma', metavar='value', type=float, help='multiplicative factor of learning rate decay', default=0.1)
+    parser_train.add_argument('--rop-reduce-factor', help='ROP scheduler reduce factory', type=float, default=0.5)
+    parser_train.add_argument('--rop-patience', help='ROP scheduler patience', type=int, default=6)
     parser_train.add_argument('--override', help='override model', action='store_true')
     parser_train.add_argument('--val-annotations', metavar='path', type=str, help='path to COCO style validation annotations')
     parser_train.add_argument('--val-images', metavar='path', type=str, help='path to validation images')
@@ -129,7 +130,7 @@ def worker(rank, args, world, model, state, logger):
         train.train(model, state, args.images, args.annotations,
             args.val_images or args.images, args.val_annotations, args.augs, args.resize, args.max_size, args.jitter,
             args.batch, int(args.iters * args.schedule), args.val_iters, not args.full_precision, args.lr, 
-            args.warmup, [int(m * args.schedule) for m in args.milestones], args.gamma, 
+            args.warmup, [int(m * args.schedule) for m in args.milestones], args.rop_reduce_factor, args.rop_patience,
             is_master=(rank == 0), world=world, use_dali=args.with_dali,
             metrics_url=args.post_metrics, logdir=args.logdir, verbose=(rank == 0))
 

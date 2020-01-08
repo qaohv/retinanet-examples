@@ -3,7 +3,7 @@ from statistics import mean
 from math import isfinite 
 import torch
 from torch.optim import SGD
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from apex import amp, optimizers
 from apex.parallel import DistributedDataParallel
@@ -17,7 +17,7 @@ from .augmentations import create_augmentations
 from .logger import get_root_logger
 
 
-def train(model, state, path, annotations, val_path, val_annotations, augs, resize, max_size, jitter, batch_size, iterations, val_iterations, mixed_precision, lr, warmup, milestones, gamma, is_master=True, world=1, use_dali=True, verbose=True, metrics_url=None, logdir=None):
+def train(model, state, path, annotations, val_path, val_annotations, augs, resize, max_size, jitter, batch_size, iterations, val_iterations, mixed_precision, lr, warmup, milestones, rop_reduce_factor, rop_patience, is_master=True, world=1, use_dali=True, verbose=True, metrics_url=None, logdir=None):
     'Train the model on the given dataset'
     logger = get_root_logger()
     # Prepare model
@@ -44,12 +44,8 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
     if 'optimizer' in state:
         optimizer.load_state_dict(state['optimizer'])
 
-    def schedule(train_iter):
-        if warmup and train_iter <= warmup:
-            return 0.9 * train_iter / warmup + 0.1
-        return gamma ** len([m for m in milestones if m <= train_iter])
-    scheduler = LambdaLR(optimizer, schedule)
-
+    scheduler = ReduceLROnPlateau(optimizer, factor=rop_reduce_factor, patience=rop_patience, verbose=True)
+    logger.info(f"Training with scheduler: {scheduler}")
     # Prepare dataset
     if verbose: logger.info('Preparing dataset...')
     with open(augs) as f:
@@ -96,8 +92,6 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
             with amp.scale_loss(cls_loss + box_loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
             optimizer.step()
-
-            scheduler.step(iteration)
 
             # Reduce all losses
             cls_loss, box_loss = cls_loss.mean().clone(), box_loss.mean().clone()
@@ -194,8 +188,9 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                     writer.add_scalar('val_box_loss', val_bbox_loss, iteration)
                     writer.add_scalar('total_val_loss', val_focal_loss + val_bbox_loss, iteration)
 
-                    del val_bbox_loss, val_focal_loss
+                scheduler.step(val_focal_loss + val_bbox_loss)
 
+                del val_bbox_loss, val_focal_loss
                 del val_cls_loss, val_box_loss
                 del val_cls_losses[:], val_box_losses[:]
                 # calculate COCO mAP
@@ -206,6 +201,7 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                     nn_model.save(state)
 
                 model.train()
+
 
             if iteration == iterations:
                 break
