@@ -44,7 +44,7 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
     if 'optimizer' in state:
         optimizer.load_state_dict(state['optimizer'])
 
-    scheduler = ReduceLROnPlateau(optimizer, factor=rop_reduce_factor, patience=rop_patience, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=rop_reduce_factor, patience=rop_patience, verbose=True)
     logger.info(f"Training with scheduler: {scheduler}")
     # Prepare dataset
     if verbose: logger.info('Preparing dataset...')
