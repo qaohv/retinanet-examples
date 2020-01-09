@@ -15,6 +15,7 @@ from .utils import ignore_sigint, post_metrics, Profiler
 from .infer import infer
 from .augmentations import create_augmentations
 from .logger import get_root_logger
+from .early_stopping import EarlyStopping
 
 
 def train(model, state, path, annotations, val_path, val_annotations, augs, resize, max_size, jitter, batch_size, iterations, val_iterations, mixed_precision, lr, warmup, milestones, rop_reduce_factor, rop_patience, is_master=True, world=1, use_dali=True, verbose=True, metrics_url=None, logdir=None):
@@ -75,7 +76,9 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
 
     profiler = Profiler(['train', 'fw', 'bw'])
     iteration = state.get('iteration', 0)
-    while iteration < iterations:
+    es = EarlyStopping(patience=10, mode='min', logger=logger)
+
+    while iteration < iterations and not es.early_stop:
         cls_losses, box_losses = [], []
         for i, (data, target) in enumerate(data_iterator):
 
@@ -188,6 +191,7 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
                     writer.add_scalar('val_box_loss', val_bbox_loss, iteration)
                     writer.add_scalar('total_val_loss', val_focal_loss + val_bbox_loss, iteration)
 
+                es(val_bbox_loss + val_bbox_loss)
                 scheduler.step(val_focal_loss + val_bbox_loss)
 
                 del val_bbox_loss, val_focal_loss
@@ -202,8 +206,7 @@ def train(model, state, path, annotations, val_path, val_annotations, augs, resi
 
                 model.train()
 
-
-            if iteration == iterations:
+            if iteration == iterations or es.early_stop:
                 break
 
     if logdir is not None:

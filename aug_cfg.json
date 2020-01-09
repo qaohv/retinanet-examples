@@ -2,5 +2,16 @@
     {
         "name": "HorizontalFlip",
         "p": 0.5
+    },
+    {
+        "name": "Blur",
+        "blur_limit": 11,
+        "p": 0.5
+    },
+    {
+        "name": "Downscale",
+        "scale_min": 0.4,
+        "scale_max": 0.6,
+        "p": 0.5
     }
 ]
